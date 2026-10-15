@@ -1,0 +1,6 @@
+{
+  "name": "Controle de PAs - Contact Center",
+  "description": "Sistema de controle visual e patrimonial para estações físicas, equipamentos e planta baixa interativa do Contact Center.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
