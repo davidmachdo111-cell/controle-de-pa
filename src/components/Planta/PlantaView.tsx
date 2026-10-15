@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { FloorObject, PA } from '../../types';
 import { PADetailDrawer } from './PADetailDrawer';
@@ -9,21 +9,18 @@ import {
   Move,
   Edit3,
   Eye,
-  Check,
   RotateCcw,
   Grid,
   Trash2,
   Plus,
   Square,
-  Maximize,
   RotateCw,
   AlignLeft,
   AlignCenter,
   Save,
   AlertCircle,
   Monitor,
-  Search,
-  SlidersHorizontal,
+  Sliders,
 } from 'lucide-react';
 
 export const PlantaView: React.FC = () => {
@@ -32,15 +29,20 @@ export const PlantaView: React.FC = () => {
     equipments,
     floorObjects,
     updateFloorObjects,
-    addPAToMap,
-    removePAFromMap,
+    createAndPlacePAOnMap,
     currentUser,
     highlightedPAId,
-    setHighlightedPAId,
+    suggestNextPACode,
+    paTypes,
+    paStatuses,
+    setHasUnsavedPlanChanges,
   } = useApp();
 
   // Mode: 'view' | 'edit'
   const [mode, setMode] = useState<'view' | 'edit'>('view');
+
+  // Modal for unsaved changes confirmation
+  const [showUnsavedExitModal, setShowUnsavedExitModal] = useState(false);
 
   // Selected PA for drawer
   const [selectedDrawerPA, setSelectedDrawerPA] = useState<PA | null>(null);
@@ -68,7 +70,27 @@ export const PlantaView: React.FC = () => {
   const [showGrid, setShowGrid] = useState(true);
   const [snapToGrid, setSnapToGrid] = useState(true);
   const [activeTool, setActiveTool] = useState<'select' | 'parede' | 'area' | 'porta' | 'mesa' | 'armario' | 'texto' | 'pa'>('select');
+
+  // Add PA Modal State
   const [showAddPAModal, setShowAddPAModal] = useState(false);
+  const [addPaTab, setAddPaTab] = useState<'existing' | 'new'>('existing');
+
+  // New PA form state
+  const [newPaCode, setNewPaCode] = useState('');
+  const [newPaTipo, setNewPaTipo] = useState('PA de Operação');
+  const [newPaStatus, setNewPaStatus] = useState('Ativo');
+  const [newPaPatrimonio, setNewPaPatrimonio] = useState('');
+  const [newPaOccDesc, setNewPaOccDesc] = useState('');
+  const [newPaError, setNewPaError] = useState('');
+
+  // Resizing state
+  const [resizingObjId, setResizingObjId] = useState<string | null>(null);
+  const [resizeCorner, setResizeCorner] = useState<'se' | 'sw' | 'ne' | 'nw' | 'r' | null>(null);
+  const [resizeStartPos, setResizeStartPos] = useState({ x: 0, y: 0, w: 0, h: 0 });
+
+  // Dragging state
+  const [draggingObjId, setDraggingObjId] = useState<string | null>(null);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
 
   // History stack for Undo / Redo
   const [history, setHistory] = useState<FloorObject[][]>([]);
@@ -80,7 +102,13 @@ export const PlantaView: React.FC = () => {
     setHistory([floorObjects]);
     setHistoryStep(0);
     setHasUnsavedChanges(false);
+    setHasUnsavedPlanChanges(false);
   }, [floorObjects, mode]);
+
+  // Sync unsaved plan changes with context
+  useEffect(() => {
+    setHasUnsavedPlanChanges(hasUnsavedChanges);
+  }, [hasUnsavedChanges, setHasUnsavedPlanChanges]);
 
   // Push state to undo history
   const pushHistoryState = (newObjs: FloorObject[]) => {
@@ -99,23 +127,28 @@ export const PlantaView: React.FC = () => {
     }
   };
 
-  const handleRedo = () => {
-    if (historyStep < history.length - 1) {
-      setHistoryStep(historyStep + 1);
-      setLocalObjects(history[historyStep + 1]);
-      setHasUnsavedChanges(true);
-    }
-  };
-
   const handleSaveChanges = () => {
     updateFloorObjects(localObjects);
     setHasUnsavedChanges(false);
+    setHasUnsavedPlanChanges(false);
   };
 
   const handleDiscardChanges = () => {
+    if (hasUnsavedChanges) {
+      setShowUnsavedExitModal(true);
+    } else {
+      setLocalObjects(floorObjects);
+      setSelectedObjIds([]);
+    }
+  };
+
+  const confirmExitWithoutSaving = () => {
     setLocalObjects(floorObjects);
     setHasUnsavedChanges(false);
+    setHasUnsavedPlanChanges(false);
     setSelectedObjIds([]);
+    setMode('view');
+    setShowUnsavedExitModal(false);
   };
 
   // Zoom handlers
@@ -126,7 +159,10 @@ export const PlantaView: React.FC = () => {
     setPan({ x: 0, y: 0 });
   };
 
-  // Dragging / Panning on SVG
+  // Snap coordinate helper
+  const snap = (val: number) => (snapToGrid ? Math.round(val / 20) * 20 : val);
+
+  // Pan SVG
   const handleMouseDownSVG = (e: React.MouseEvent) => {
     if (mode === 'view' || activeTool === 'select') {
       if ((e.target as HTMLElement).tagName === 'svg' || (e.target as HTMLElement).id === 'bg-grid') {
@@ -140,31 +176,76 @@ export const PlantaView: React.FC = () => {
   const handleMouseMoveSVG = (e: React.MouseEvent) => {
     if (isPanning) {
       setPan({ x: e.clientX - startPan.x, y: e.clientY - startPan.y });
+      return;
+    }
+
+    // Dragging object
+    if (mode === 'edit' && draggingObjId) {
+      const newX = snap(e.clientX - dragOffset.x);
+      const newY = snap(e.clientY - dragOffset.y);
+
+      setLocalObjects((prev) =>
+        prev.map((o) => (o.id === draggingObjId ? { ...o, x: newX, y: newY } : o))
+      );
+      return;
+    }
+
+    // Resizing or Rotating object
+    if (mode === 'edit' && resizingObjId && resizeCorner) {
+      const dx = (e.clientX - resizeStartPos.x) / zoom;
+      const dy = (e.clientY - resizeStartPos.y) / zoom;
+
+      setLocalObjects((prev) =>
+        prev.map((o) => {
+          if (o.id === resizingObjId) {
+            if (resizeCorner === 'se') {
+              const newW = Math.max(30, snap(resizeStartPos.w + dx));
+              const newH = Math.max(20, snap(resizeStartPos.h + dy));
+              return { ...o, width: newW, height: newH };
+            } else if (resizeCorner === 'r') {
+              // Rotation handle dragging
+              const centerX = o.x + o.width / 2;
+              const centerY = o.y + o.height / 2;
+              const rad = Math.atan2(e.clientY - centerY, e.clientX - centerX);
+              let deg = Math.round((rad * 180) / Math.PI);
+              if (deg < 0) deg += 360;
+              deg = Math.round(deg / 15) * 15; // Snap to 15deg
+              return { ...o, rotation: deg % 360 };
+            }
+          }
+          return o;
+        })
+      );
     }
   };
 
   const handleMouseUpSVG = () => {
-    setIsPanning(false);
+    if (isPanning) setIsPanning(false);
+
+    if (draggingObjId) {
+      setDraggingObjId(null);
+      pushHistoryState(localObjects);
+    }
+
+    if (resizingObjId) {
+      setResizingObjId(null);
+      setResizeCorner(null);
+      pushHistoryState(localObjects);
+    }
   };
 
-  // Snap coordinate helper
-  const snap = (val: number) => (snapToGrid ? Math.round(val / 20) * 20 : val);
-
-  // Object dragging in Edit mode
-  const [draggingObjId, setDraggingObjId] = useState<string | null>(null);
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
-
+  // Click object handler
   const handleObjectMouseDown = (e: React.MouseEvent, objId: string) => {
     e.stopPropagation();
-    if (mode === 'view') {
-      const clickedObj = localObjects.find((o) => o.id === objId);
-      if (clickedObj?.category === 'pa' && clickedObj.paCode) {
-        const foundPA = pas.find((p) => p.code === clickedObj.paCode);
-        if (foundPA) {
-          setSelectedDrawerPA(foundPA);
-        }
+
+    const clickedObj = localObjects.find((o) => o.id === objId);
+
+    // In View OR Edit Mode: Clicking a PA opens the PA Management Drawer!
+    if (clickedObj?.category === 'pa' && clickedObj.paCode) {
+      const foundPA = pas.find((p) => p.code === clickedObj.paCode);
+      if (foundPA) {
+        setSelectedDrawerPA(foundPA);
       }
-      return;
     }
 
     if (mode === 'edit' && activeTool === 'select') {
@@ -176,35 +257,22 @@ export const PlantaView: React.FC = () => {
         }
       }
 
-      const targetObj = localObjects.find((o) => o.id === objId);
-      if (targetObj) {
+      if (clickedObj) {
         setDraggingObjId(objId);
-        setDragOffset({ x: e.clientX - targetObj.x, y: e.clientY - targetObj.y });
+        setDragOffset({ x: e.clientX - clickedObj.x, y: e.clientY - clickedObj.y });
       }
     }
   };
 
-  const handleObjectMouseMove = (e: React.MouseEvent) => {
-    if (mode === 'edit' && draggingObjId) {
-      const newX = snap(e.clientX - dragOffset.x);
-      const newY = snap(e.clientY - dragOffset.y);
+  // Resize / Rotation handle mouse down
+  const handleHandleMouseDown = (e: React.MouseEvent, objId: string, handleType: 'se' | 'r') => {
+    e.stopPropagation();
+    const obj = localObjects.find((o) => o.id === objId);
+    if (!obj) return;
 
-      const updated = localObjects.map((o) => {
-        if (o.id === draggingObjId) {
-          return { ...o, x: newX, y: newY };
-        }
-        return o;
-      });
-
-      setLocalObjects(updated);
-    }
-  };
-
-  const handleObjectMouseUp = () => {
-    if (mode === 'edit' && draggingObjId) {
-      setDraggingObjId(null);
-      pushHistoryState(localObjects);
-    }
+    setResizingObjId(objId);
+    setResizeCorner(handleType);
+    setResizeStartPos({ x: e.clientX, y: e.clientY, w: obj.width, h: obj.height });
   };
 
   // Tool actions: Adding elements
@@ -233,6 +301,7 @@ export const PlantaView: React.FC = () => {
       newObj.height = 180;
       newObj.fill = 'rgba(0, 140, 80, 0.05)';
       newObj.stroke = '#008C50';
+      newObj.name = 'Área / Sala';
     } else if (type === 'porta') {
       newObj.category = 'estrutura';
       newObj.width = 60;
@@ -242,11 +311,17 @@ export const PlantaView: React.FC = () => {
       newObj.category = 'mobiliario';
       newObj.width = 60;
       newObj.height = 40;
+      newObj.name = 'Armário';
+    } else if (type === 'mesa') {
+      newObj.category = 'mobiliario';
+      newObj.width = 120;
+      newObj.height = 60;
+      newObj.name = 'Mesa / Bancada';
     } else if (type === 'texto') {
       newObj.category = 'identificacao';
       newObj.width = 120;
       newObj.height = 30;
-      newObj.name = 'Texto / Rótulo';
+      newObj.name = 'Rótulo / Texto';
     }
 
     pushHistoryState([...localObjects, newObj]);
@@ -254,8 +329,19 @@ export const PlantaView: React.FC = () => {
     setActiveTool('select');
   };
 
-  // Rotate selected objects 90 degrees
-  const handleRotateSelected = () => {
+  // Rotation helpers
+  const handleSetRotation = (deg: number) => {
+    if (selectedObjIds.length === 0) return;
+    const updated = localObjects.map((o) => {
+      if (selectedObjIds.includes(o.id)) {
+        return { ...o, rotation: deg % 360 };
+      }
+      return o;
+    });
+    pushHistoryState(updated);
+  };
+
+  const handleRotate90 = () => {
     if (selectedObjIds.length === 0) return;
     const updated = localObjects.map((o) => {
       if (selectedObjIds.includes(o.id)) {
@@ -266,7 +352,7 @@ export const PlantaView: React.FC = () => {
     pushHistoryState(updated);
   };
 
-  // Delete selected objects from map (Preserves PA entity in database!)
+  // Delete selected objects from map (Preserves PA entity!)
   const handleDeleteSelected = () => {
     if (selectedObjIds.length === 0) return;
     const updated = localObjects.filter((o) => !selectedObjIds.includes(o.id));
@@ -274,25 +360,50 @@ export const PlantaView: React.FC = () => {
     setSelectedObjIds([]);
   };
 
-  // Align helpers
-  const handleAlign = (alignment: 'left' | 'center' | 'top' | 'bottom') => {
-    if (selectedObjIds.length < 2) return;
-    const selectedObjs = localObjects.filter((o) => selectedObjIds.includes(o.id));
+  // Create brand new PA directly from floor plan modal
+  const handleCreateNewPAFromPlan = (e: React.FormEvent) => {
+    e.preventDefault();
+    setNewPaError('');
 
-    let targetVal = 0;
-    if (alignment === 'left') targetVal = Math.min(...selectedObjs.map((o) => o.x));
-    if (alignment === 'top') targetVal = Math.min(...selectedObjs.map((o) => o.y));
+    if (!newPaCode.trim()) {
+      setNewPaError('Informe o código da nova PA.');
+      return;
+    }
 
-    const updated = localObjects.map((o) => {
-      if (selectedObjIds.includes(o.id)) {
-        if (alignment === 'left') return { ...o, x: targetVal };
-        if (alignment === 'top') return { ...o, y: targetVal };
-      }
-      return o;
-    });
+    const res = createAndPlacePAOnMap(
+      {
+        code: newPaCode.trim().toUpperCase(),
+        tipoId: paTypes.find((t) => t.name === newPaTipo)?.id || 'patype-1',
+        tipoNome: newPaTipo,
+        statusId: paStatuses.find((s) => s.name === newPaStatus)?.id || 'pastatus-1',
+        statusNome: newPaStatus,
+        patrimonioPA: newPaPatrimonio.trim() || undefined,
+        computadorId: null,
+        monitorIds: [],
+        observacoes: 'Criada via editor de planta.',
+        x: 350,
+        y: 350,
+        rotation: 0,
+        width: 70,
+        height: 48,
+      },
+      newPaOccDesc,
+      350,
+      350
+    );
 
-    pushHistoryState(updated);
+    if (!res.success) {
+      setNewPaError(res.error || 'Erro ao criar PA.');
+      return;
+    }
+
+    setShowAddPAModal(false);
+    setNewPaCode('');
+    setNewPaPatrimonio('');
+    setNewPaOccDesc('');
   };
+
+  const primarySelectedObj = selectedObjIds.length === 1 ? localObjects.find((o) => o.id === selectedObjIds[0]) : null;
 
   return (
     <div className="flex-1 flex flex-col h-[calc(100vh-4rem)] bg-slate-100 overflow-hidden relative select-none">
@@ -303,9 +414,12 @@ export const PlantaView: React.FC = () => {
           <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200">
             <button
               onClick={() => {
-                if (hasUnsavedChanges && !window.confirm('Existem alterações não salvas. Deseja descartar?')) return;
-                setMode('view');
-                setSelectedObjIds([]);
+                if (hasUnsavedChanges) {
+                  setShowUnsavedExitModal(true);
+                } else {
+                  setMode('view');
+                  setSelectedObjIds([]);
+                }
               }}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
                 mode === 'view' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
@@ -372,7 +486,7 @@ export const PlantaView: React.FC = () => {
               <button onClick={handleZoomOut} className="p-1.5 hover:bg-white text-slate-700 rounded-md" title="Diminuir Zoom">
                 <ZoomOut className="w-3.5 h-3.5" />
               </button>
-              <button onClick={handleResetZoom} className="p-1.5 hover:bg-white text-slate-700 rounded-md" title="Resetar Visualização">
+              <button onClick={handleResetZoom} className="p-1.5 hover:bg-white text-slate-700 rounded-md" title="Resetar Zoom">
                 <Maximize2 className="w-3.5 h-3.5" />
               </button>
               <button onClick={handleZoomIn} className="p-1.5 hover:bg-white text-slate-700 rounded-md" title="Aumentar Zoom">
@@ -387,8 +501,8 @@ export const PlantaView: React.FC = () => {
       <div className="flex-1 flex relative overflow-hidden">
         {/* Editor Floating Toolbar (Edit mode only) */}
         {mode === 'edit' && (
-          <div className="absolute top-4 left-4 z-20 bg-white/95 backdrop-blur-md p-2 rounded-2xl border border-slate-200 shadow-xl flex flex-col gap-1 w-48">
-            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-2 py-1">Ferramentas</div>
+          <div className="absolute top-4 left-4 z-20 bg-white/95 backdrop-blur-md p-2.5 rounded-2xl border border-slate-200 shadow-xl flex flex-col gap-2 w-52">
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-2">Ferramentas de Desenho</div>
 
             <button
               onClick={() => setActiveTool('select')}
@@ -397,7 +511,7 @@ export const PlantaView: React.FC = () => {
               }`}
             >
               <Move className="w-3.5 h-3.5" />
-              <span>Selecionar</span>
+              <span>Mover / Selecionar</span>
             </button>
 
             <button
@@ -441,19 +555,84 @@ export const PlantaView: React.FC = () => {
             </button>
 
             <button
-              onClick={() => setShowAddPAModal(true)}
-              className="w-full flex items-center gap-2 px-2.5 py-1.5 bg-[#008C50]/10 hover:bg-[#008C50]/20 text-[#008C50] rounded-xl text-xs font-bold transition-all"
+              onClick={() => {
+                setNewPaCode(suggestNextPACode());
+                setShowAddPAModal(true);
+              }}
+              className="w-full flex items-center gap-2 px-2.5 py-1.5 bg-[#008C50] text-white hover:bg-[#007342] rounded-xl text-xs font-bold shadow-2xs transition-all"
             >
               <Plus className="w-3.5 h-3.5" />
-              <span>Adicionar PA</span>
+              <span>+ Adicionar PA</span>
             </button>
 
-            <div className="pt-2 mt-1 border-t border-slate-100 space-y-1">
-              <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-2">Ações</div>
+            {/* Rotation & Size Properties for Selected Object */}
+            {primarySelectedObj && (
+              <div className="pt-2 mt-1 border-t border-slate-100 space-y-2">
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-1">
+                  Elemento: {primarySelectedObj.name}
+                </div>
 
-              <div className="flex items-center gap-1 px-1">
+                {/* Rotation Presets */}
+                <div className="space-y-1">
+                  <div className="text-[10px] font-semibold text-slate-500">Rotação: {primarySelectedObj.rotation}°</div>
+                  <div className="grid grid-cols-4 gap-1">
+                    {[0, 90, 180, 270].map((deg) => (
+                      <button
+                        key={deg}
+                        onClick={() => handleSetRotation(deg)}
+                        className={`py-1 text-[10px] font-bold rounded ${
+                          primarySelectedObj.rotation === deg
+                            ? 'bg-[#004F4C] text-white'
+                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        }`}
+                      >
+                        {deg}°
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Dimension inputs */}
+                <div className="grid grid-cols-2 gap-1.5 text-[10px]">
+                  <div>
+                    <label className="text-slate-500 font-semibold">Largura</label>
+                    <input
+                      type="number"
+                      value={primarySelectedObj.width}
+                      onChange={(e) => {
+                        const val = Math.max(20, parseInt(e.target.value) || 20);
+                        pushHistoryState(
+                          localObjects.map((o) => (o.id === primarySelectedObj.id ? { ...o, width: val } : o))
+                        );
+                      }}
+                      className="w-full p-1 bg-slate-50 border border-slate-200 rounded font-mono font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-500 font-semibold">Altura</label>
+                    <input
+                      type="number"
+                      value={primarySelectedObj.height}
+                      onChange={(e) => {
+                        const val = Math.max(20, parseInt(e.target.value) || 20);
+                        pushHistoryState(
+                          localObjects.map((o) => (o.id === primarySelectedObj.id ? { ...o, height: val } : o))
+                        );
+                      }}
+                      className="w-full p-1 bg-slate-50 border border-slate-200 rounded font-mono font-bold"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* General Actions */}
+            <div className="pt-2 mt-1 border-t border-slate-100 space-y-1">
+              <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-1">Ações do Editor</div>
+
+              <div className="flex items-center justify-between px-1">
                 <button
-                  onClick={handleRotateSelected}
+                  onClick={handleRotate90}
                   disabled={selectedObjIds.length === 0}
                   className="p-1.5 hover:bg-slate-100 disabled:opacity-30 rounded-lg text-slate-700"
                   title="Girar 90°"
@@ -465,7 +644,7 @@ export const PlantaView: React.FC = () => {
                   onClick={handleDeleteSelected}
                   disabled={selectedObjIds.length === 0}
                   className="p-1.5 hover:bg-red-50 text-red-600 disabled:opacity-30 rounded-lg"
-                  title="Remover da planta"
+                  title="Remover elemento"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -495,14 +674,8 @@ export const PlantaView: React.FC = () => {
         <div
           className="flex-1 h-full w-full overflow-hidden bg-slate-50 cursor-grab active:cursor-grabbing relative"
           onMouseDown={handleMouseDownSVG}
-          onMouseMove={(e) => {
-            handleMouseMoveSVG(e);
-            handleObjectMouseMove(e);
-          }}
-          onMouseUp={() => {
-            handleMouseUpSVG();
-            handleObjectMouseUp();
-          }}
+          onMouseMove={handleMouseMoveSVG}
+          onMouseUp={handleMouseUpSVG}
         >
           <svg
             id="bg-grid"
@@ -528,7 +701,7 @@ export const PlantaView: React.FC = () => {
               const paObj = isPA ? pas.find((p) => p.code === obj.paCode) : null;
               const isHighlighted = paObj && paObj.id === highlightedPAId;
 
-              // PA Status styling
+              // PA Status styling (Live Single Source of Truth)
               let paBgColor = '#FFFFFF';
               let paBorderColor = '#008C50';
               let paTextColor = '#004F4C';
@@ -558,7 +731,7 @@ export const PlantaView: React.FC = () => {
                   onMouseDown={(e) => handleObjectMouseDown(e, obj.id)}
                   className="cursor-pointer"
                 >
-                  {/* Highlight ring for target search match */}
+                  {/* Search highlight ring */}
                   {isHighlighted && (
                     <rect
                       x={-6}
@@ -581,8 +754,8 @@ export const PlantaView: React.FC = () => {
                         height={obj.height}
                         rx={8}
                         fill={obj.fill || 'rgba(0, 140, 80, 0.05)'}
-                        stroke={obj.stroke || '#008C50'}
-                        strokeWidth={1.5}
+                        stroke={isSelected ? '#004F4C' : obj.stroke || '#008C50'}
+                        strokeWidth={isSelected ? 2.5 : 1.5}
                         strokeDasharray="4 4"
                       />
                       <text
@@ -648,7 +821,7 @@ export const PlantaView: React.FC = () => {
                     </g>
                   )}
 
-                  {/* 5. PA Native Station Box */}
+                  {/* 5. PA Native Workstation Box */}
                   {isPA && (
                     <g>
                       <rect
@@ -674,7 +847,7 @@ export const PlantaView: React.FC = () => {
                         {obj.paCode || obj.name}
                       </text>
 
-                      {/* Equipment indicator details */}
+                      {/* Equipment live indicator details */}
                       {paObj && (
                         <text
                           x={obj.width / 2}
@@ -689,7 +862,7 @@ export const PlantaView: React.FC = () => {
                         </text>
                       )}
 
-                      {/* Maintenance Warning Indicator Dot (•) */}
+                      {/* Maintenance Dot Indicator */}
                       {isMaintenance && (
                         <circle
                           cx={obj.width - 8}
@@ -710,18 +883,54 @@ export const PlantaView: React.FC = () => {
                     </g>
                   )}
 
-                  {/* Selection Box Handles (Edit mode) */}
+                  {/* INTERACTIVE RESIZE & ROTATION HANDLES (Edit Mode) */}
                   {mode === 'edit' && isSelected && (
-                    <rect
-                      x={-4}
-                      y={-4}
-                      width={obj.width + 8}
-                      height={obj.height + 8}
-                      fill="none"
-                      stroke="#008C50"
-                      strokeWidth={1.5}
-                      strokeDasharray="3 3"
-                    />
+                    <g>
+                      {/* Selection Outline */}
+                      <rect
+                        x={-4}
+                        y={-4}
+                        width={obj.width + 8}
+                        height={obj.height + 8}
+                        fill="none"
+                        stroke="#008C50"
+                        strokeWidth={1.5}
+                        strokeDasharray="3 3"
+                      />
+
+                      {/* Bottom-Right Resize Handle */}
+                      <rect
+                        x={obj.width - 4}
+                        y={obj.height - 4}
+                        width={8}
+                        height={8}
+                        fill="#008C50"
+                        stroke="#FFFFFF"
+                        strokeWidth={1.5}
+                        className="cursor-se-resize"
+                        onMouseDown={(e) => handleHandleMouseDown(e, obj.id, 'se')}
+                      />
+
+                      {/* Top Rotation Handle Pin */}
+                      <line
+                        x1={obj.width / 2}
+                        y1={-4}
+                        x2={obj.width / 2}
+                        y2={-16}
+                        stroke="#008C50"
+                        strokeWidth={1.5}
+                      />
+                      <circle
+                        cx={obj.width / 2}
+                        cy={-18}
+                        r={5}
+                        fill="#004F4C"
+                        stroke="#FFFFFF"
+                        strokeWidth={1.5}
+                        className="cursor-grab active:cursor-grabbing"
+                        onMouseDown={(e) => handleHandleMouseDown(e, obj.id, 'r')}
+                      />
+                    </g>
                   )}
                 </g>
               );
@@ -729,7 +938,7 @@ export const PlantaView: React.FC = () => {
           </svg>
         </div>
 
-        {/* PA Detail Drawer on Right */}
+        {/* PA Management Detail Drawer */}
         {selectedDrawerPA && (
           <PADetailDrawer
             pa={selectedDrawerPA}
@@ -738,75 +947,236 @@ export const PlantaView: React.FC = () => {
         )}
       </div>
 
-      {/* Modal: Add PA to Floor Plan */}
+      {/* MODAL: Adicionar PA à Planta */}
       {showAddPAModal && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-200">
             <h3 className="text-base font-bold text-slate-900 mb-1">Adicionar PA à Planta</h3>
             <p className="text-xs text-slate-500 mb-4">
-              Selecione uma PA do cadastro para posicionar visualmente na planta.
+              Posicione uma PA existente ou crie uma nova estação que será sincronizada em tempo real.
             </p>
 
-            <div className="max-h-64 overflow-y-auto space-y-2 pr-1 my-3">
-              {pas.map((p) => {
-                const isPlaced = localObjects.some((o) => o.paCode === p.code);
+            {/* Tab Switcher */}
+            <div className="flex bg-slate-100 p-1 rounded-xl mb-4 border border-slate-200">
+              <button
+                onClick={() => setAddPaTab('existing')}
+                className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                  addPaTab === 'existing' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Escolher do Cadastro
+              </button>
 
-                return (
-                  <div
-                    key={p.id}
-                    onClick={() => {
-                      if (!isPlaced) {
-                        const newId = `flobj-pa-${Date.now()}`;
-                        const newFloorObj: FloorObject = {
-                          id: newId,
-                          category: 'pa',
-                          type: 'pa',
-                          name: p.code,
-                          x: 400,
-                          y: 300,
-                          width: p.width || 70,
-                          height: p.height || 48,
-                          rotation: 0,
-                          paCode: p.code,
-                        };
-                        pushHistoryState([...localObjects, newFloorObj]);
-                        setShowAddPAModal(false);
-                      }
-                    }}
-                    className={`p-3 rounded-xl border flex items-center justify-between transition-all ${
-                      isPlaced
-                        ? 'border-slate-100 bg-slate-50 opacity-60 cursor-not-allowed'
-                        : 'border-slate-200 hover:border-[#008C50] hover:bg-[#008C50]/5 cursor-pointer'
-                    }`}
-                  >
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-bold text-slate-900">{p.code}</span>
-                        <span className="text-xs text-slate-500">({p.tipoNome})</span>
-                      </div>
-                      <div className="text-xs text-slate-500 mt-0.5">
-                        Status: {p.statusNome} · {p.monitorIds.length} monitores
-                      </div>
-                    </div>
-
-                    <span
-                      className={`text-xs font-semibold px-2 py-0.5 rounded ${
-                        isPlaced ? 'bg-slate-200 text-slate-600' : 'bg-[#008C50] text-white'
-                      }`}
-                    >
-                      {isPlaced ? 'Já posicionada' : 'Posicionar'}
-                    </span>
-                  </div>
-                );
-              })}
+              <button
+                onClick={() => setAddPaTab('new')}
+                className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                  addPaTab === 'new' ? 'bg-[#008C50] text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                + Criar Nova PA na Hora
+              </button>
             </div>
 
-            <div className="flex justify-end pt-4 border-t border-slate-100">
+            {/* TAB 1: Posicionar PA Existente */}
+            {addPaTab === 'existing' && (
+              <div className="max-h-64 overflow-y-auto space-y-2 pr-1 my-3">
+                {pas.map((p) => {
+                  const isPlaced = localObjects.some((o) => o.paCode === p.code);
+
+                  return (
+                    <div
+                      key={p.id}
+                      onClick={() => {
+                        if (!isPlaced) {
+                          const newId = `flobj-pa-${Date.now()}`;
+                          const newFloorObj: FloorObject = {
+                            id: newId,
+                            category: 'pa',
+                            type: 'pa',
+                            name: p.code,
+                            x: 350,
+                            y: 350,
+                            width: p.width || 70,
+                            height: p.height || 48,
+                            rotation: 0,
+                            paCode: p.code,
+                          };
+                          pushHistoryState([...localObjects, newFloorObj]);
+                          setShowAddPAModal(false);
+                        }
+                      }}
+                      className={`p-3 rounded-xl border flex items-center justify-between transition-all ${
+                        isPlaced
+                          ? 'border-slate-100 bg-slate-50 opacity-60 cursor-not-allowed'
+                          : 'border-slate-200 hover:border-[#008C50] hover:bg-[#008C50]/5 cursor-pointer'
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-bold text-slate-900">{p.code}</span>
+                          <span className="text-xs text-slate-500">({p.tipoNome})</span>
+                        </div>
+                        <div className="text-xs text-slate-500 mt-0.5">
+                          Status: {p.statusNome} · {p.monitorIds.length} monitores
+                        </div>
+                      </div>
+
+                      <span
+                        className={`text-xs font-semibold px-2 py-0.5 rounded ${
+                          isPlaced ? 'bg-slate-200 text-slate-600' : 'bg-[#008C50] text-white'
+                        }`}
+                      >
+                        {isPlaced ? 'Já posicionada' : 'Posicionar'}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* TAB 2: Criar Nova PA na Hora */}
+            {addPaTab === 'new' && (
+              <form onSubmit={handleCreateNewPAFromPlan} className="space-y-3 my-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Código da PA <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={newPaCode}
+                    onChange={(e) => setNewPaCode(e.target.value)}
+                    placeholder="Ex: PA-046"
+                    className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-[#008C50] font-bold"
+                    required
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Tipo</label>
+                    <select
+                      value={newPaTipo}
+                      onChange={(e) => setNewPaTipo(e.target.value)}
+                      className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-[#008C50]"
+                    >
+                      {paTypes.map((t) => (
+                        <option key={t.id} value={t.name}>
+                          {t.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Status</label>
+                    <select
+                      value={newPaStatus}
+                      onChange={(e) => setNewPaStatus(e.target.value)}
+                      className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-[#008C50]"
+                    >
+                      {paStatuses.map((s) => (
+                        <option key={s.id} value={s.name}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Patrimônio da Mesa</label>
+                  <input
+                    type="text"
+                    value={newPaPatrimonio}
+                    onChange={(e) => setNewPaPatrimonio(e.target.value)}
+                    placeholder="Ex: 0055100"
+                    className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-[#008C50] font-mono"
+                  />
+                </div>
+
+                {paStatuses.find((s) => s.name === newPaStatus)?.requiresOccurrence && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Ocorrência de Manutenção <span className="text-red-500">*</span>
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={newPaOccDesc}
+                      onChange={(e) => setNewPaOccDesc(e.target.value)}
+                      placeholder="Descreva o motivo da manutenção..."
+                      className="w-full text-xs p-2 bg-white border border-orange-300 rounded-lg focus:outline-none"
+                      required
+                    />
+                  </div>
+                )}
+
+                {newPaError && <div className="text-xs text-red-600 font-medium">{newPaError}</div>}
+
+                <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setShowAddPAModal(false)}
+                    className="px-3 py-1.5 text-xs text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-1.5 text-xs font-bold text-white bg-[#008C50] hover:bg-[#007342] rounded-xl shadow-2xs"
+                  >
+                    Criar e Posicionar na Planta
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {addPaTab === 'existing' && (
+              <div className="flex justify-end pt-3 border-t border-slate-100">
+                <button
+                  onClick={() => setShowAddPAModal(false)}
+                  className="px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl"
+                >
+                  Fechar
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL CRÍTICO: Alterações não salvas na Planta */}
+      {showUnsavedExitModal && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-amber-200 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-3 text-amber-600 mb-3">
+              <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center shrink-0">
+                <AlertCircle className="w-5 h-5 text-amber-600" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Alterações não salvas</h3>
+                <p className="text-xs text-amber-700 font-medium">Controle de Alterações Pendentes</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 mb-5 leading-relaxed">
+              Você possui alterações pendentes na planta. Deseja realmente sair sem salvar?
+            </p>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
               <button
-                onClick={() => setShowAddPAModal(false)}
-                className="px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg"
+                type="button"
+                onClick={() => setShowUnsavedExitModal(false)}
+                className="px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors"
               >
-                Cancelar
+                Não, Continuar Editando
+              </button>
+
+              <button
+                type="button"
+                onClick={confirmExitWithoutSaving}
+                className="px-4 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl shadow-2xs transition-colors"
+              >
+                Sim, Sair sem Salvar
               </button>
             </div>
           </div>

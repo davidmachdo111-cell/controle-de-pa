@@ -7,10 +7,10 @@ export const Header: React.FC = () => {
   const {
     currentUser,
     setCurrentUserRole,
-    globalSearch,
+    pesquisaGlobal,
     setActiveTab,
-    setHighlightedPAId,
-    setHighlightedEquipmentId,
+    setSelectedPAId,
+    setSelectedPatrimonioId,
     resetToInitialData,
   } = useApp();
 
@@ -22,7 +22,7 @@ export const Header: React.FC = () => {
 
   useEffect(() => {
     if (searchQuery.trim().length >= 2) {
-      const results = globalSearch(searchQuery);
+      const results = pesquisaGlobal(searchQuery);
       setSearchResults(results);
       setIsSearchOpen(true);
     } else {
@@ -31,7 +31,6 @@ export const Header: React.FC = () => {
     }
   }, [searchQuery]);
 
-  // Click outside listener for search dropdown
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (searchContainerRef.current && !searchContainerRef.current.contains(event.target as Node)) {
@@ -49,14 +48,14 @@ export const Header: React.FC = () => {
     if (action === 'plant') {
       setActiveTab('planta');
       if (result.paId) {
-        setHighlightedPAId(result.paId);
+        setSelectedPAId(result.paId);
       }
     } else {
       if (result.type === 'PA' && result.paId) {
-        setHighlightedPAId(result.paId);
+        setSelectedPAId(result.paId);
         setActiveTab('pas');
       } else if (result.type === 'PATRIMONIO' && result.equipmentId) {
-        setHighlightedEquipmentId(result.equipmentId);
+        setSelectedPatrimonioId(result.equipmentId);
         setActiveTab('patrimonios');
       }
     }
@@ -71,10 +70,10 @@ export const Header: React.FC = () => {
         </div>
         <div>
           <h1 className="text-base font-bold text-slate-900 leading-tight">
-            Controle de PAs <span className="text-[#008C50] text-sm font-semibold">· Contact Center</span>
+            Controle de PA <span className="text-[#004F4C] text-sm font-semibold">· Planta Central</span>
           </h1>
           <p className="text-xs text-slate-500 font-medium hidden sm:block">
-            Gestão visual, patrimonial e operacional de estações
+            Gestão de infraestrutura, postos de atendimento e patrimônios
           </p>
         </div>
       </div>
@@ -88,8 +87,8 @@ export const Header: React.FC = () => {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onFocus={() => searchQuery.trim().length >= 2 && setIsSearchOpen(true)}
-            placeholder="Pesquisar PA ou patrimônio... (ex: PA-027, 1000105)"
-            className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:bg-white focus:border-[#008C50] focus:ring-2 focus:ring-[#008C50]/20 transition-all"
+            placeholder="Pesquisar PA ou patrimônio... (ex: PA-01, PAT-1020)"
+            className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:bg-white focus:border-[#004F4C] focus:ring-2 focus:ring-[#004F4C]/20 transition-all"
           />
         </div>
 
@@ -105,7 +104,7 @@ export const Header: React.FC = () => {
                 <div key={res.id} className="p-3 hover:bg-slate-50 transition-colors flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className={`text-xs font-semibold px-2 py-0.5 rounded text-white ${res.type === 'PA' ? 'bg-[#004F4C]' : 'bg-[#008C50]'}`}>
+                      <span className={`text-xs font-semibold px-2 py-0.5 rounded text-white ${res.type === 'PA' ? 'bg-[#004F4C]' : 'bg-blue-600'}`}>
                         {res.type}
                       </span>
                       <span className="text-sm font-semibold text-slate-800 truncate">{res.title}</span>
@@ -130,7 +129,7 @@ export const Header: React.FC = () => {
                         title="Ver localização na planta"
                       >
                         <MapPin className="w-3.5 h-3.5 text-[#004F4C]" />
-                        <span>Ver na planta</span>
+                        <span>Na Planta</span>
                       </button>
                     )}
                   </div>
@@ -147,10 +146,10 @@ export const Header: React.FC = () => {
           onClick={() => setIsRoleModalOpen(true)}
           className="flex items-center gap-2 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs font-medium text-slate-800 transition-colors border border-slate-200"
         >
-          <Shield className={`w-3.5 h-3.5 ${currentUser.role === 'Administrador' ? 'text-[#008C50]' : 'text-slate-500'}`} />
+          <Shield className={`w-3.5 h-3.5 ${currentUser.role === 'Administrador' ? 'text-[#004F4C]' : 'text-slate-500'}`} />
           <span className="hidden sm:inline font-semibold">{currentUser.username}</span>
           <span className={`px-1.5 py-0.5 text-[10px] rounded font-bold uppercase tracking-wider ${
-            currentUser.role === 'Administrador' ? 'bg-[#008C50]/15 text-[#008C50]' : 'bg-slate-200 text-slate-700'
+            currentUser.role === 'Administrador' ? 'bg-[#004F4C]/15 text-[#004F4C]' : 'bg-slate-200 text-slate-700'
           }`}>
             {currentUser.role}
           </span>
@@ -163,7 +162,7 @@ export const Header: React.FC = () => {
               resetToInitialData();
             }
           }}
-          title="Resetar dados iniciais de demonstração"
+          title="Resetar dados de demonstração"
           className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
         >
           <RotateCcw className="w-4 h-4" />
@@ -180,7 +179,7 @@ export const Header: React.FC = () => {
               </div>
               <div>
                 <h3 className="text-base font-bold text-slate-900">Perfil de Acesso</h3>
-                <p className="text-xs text-slate-500">Alterne entre o perfil Administrador e Visualização</p>
+                <p className="text-xs text-slate-500">Alterne entre Administrador e Visualização</p>
               </div>
             </div>
 
@@ -192,20 +191,20 @@ export const Header: React.FC = () => {
                 }}
                 className={`w-full text-left p-3 rounded-xl border transition-all flex items-start justify-between ${
                   currentUser.role === 'Administrador'
-                    ? 'border-[#008C50] bg-[#008C50]/5 ring-1 ring-[#008C50]'
+                    ? 'border-[#004F4C] bg-[#004F4C]/5 ring-1 ring-[#004F4C]'
                     : 'border-slate-200 hover:bg-slate-50'
                 }`}
               >
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-bold text-slate-900">Administrador</span>
-                    <span className="text-[10px] bg-[#008C50] text-white px-1.5 py-0.5 rounded font-medium">Contactgestao</span>
+                    <span className="text-[10px] bg-[#004F4C] text-white px-1.5 py-0.5 rounded font-medium">Contactgestao</span>
                   </div>
                   <p className="text-xs text-slate-500 mt-1">
-                    Permissão total: cadastro, edição, ocorrências, editor de planta e configurações.
+                    Permissão total: edição de planta, movimentações, exclusões e cadastros.
                   </p>
                 </div>
-                {currentUser.role === 'Administrador' && <CheckCircle className="w-5 h-5 text-[#008C50] shrink-0 mt-0.5" />}
+                {currentUser.role === 'Administrador' && <CheckCircle className="w-5 h-5 text-[#004F4C] shrink-0 mt-0.5" />}
               </button>
 
               <button
@@ -215,7 +214,7 @@ export const Header: React.FC = () => {
                 }}
                 className={`w-full text-left p-3 rounded-xl border transition-all flex items-start justify-between ${
                   currentUser.role === 'Visualização'
-                    ? 'border-[#004F4C] bg-[#004F4C]/5 ring-1 ring-[#004F4C]'
+                    ? 'border-slate-400 bg-slate-50 ring-1 ring-slate-400'
                     : 'border-slate-200 hover:bg-slate-50'
                 }`}
               >
@@ -225,10 +224,10 @@ export const Header: React.FC = () => {
                     <span className="text-[10px] bg-slate-600 text-white px-1.5 py-0.5 rounded font-medium">operador1</span>
                   </div>
                   <p className="text-xs text-slate-500 mt-1">
-                    Modo consulta: visualização de dashboard, consulta de planta, PAs, patrimônios e histórico.
+                    Modo consulta: leitura de mapas, estatísticas e buscas de patrimônio.
                   </p>
                 </div>
-                {currentUser.role === 'Visualização' && <CheckCircle className="w-5 h-5 text-[#004F4C] shrink-0 mt-0.5" />}
+                {currentUser.role === 'Visualização' && <CheckCircle className="w-5 h-5 text-slate-600 shrink-0 mt-0.5" />}
               </button>
             </div>
 

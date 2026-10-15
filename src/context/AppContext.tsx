@@ -12,6 +12,7 @@ import {
   User,
 } from '../types';
 import {
+  generateFullDemoData,
   generateSeedData,
   INITIAL_EQUIPMENT_STATUSES,
   INITIAL_EQUIPMENT_TYPES,
@@ -47,8 +48,10 @@ interface AppContextType {
 
   // Actions
   addPA: (pa: Omit<PA, 'id' | 'createdAt'>, occurrenceDesc?: string) => { success: boolean; error?: string };
+  createAndPlacePAOnMap: (paData: Omit<PA, 'id' | 'createdAt'>, occurrenceDesc?: string, x?: number, y?: number) => { success: boolean; error?: string };
   updatePA: (id: string, updates: Partial<PA>, occurrenceDesc?: string) => { success: boolean; error?: string };
   deletePA: (id: string) => void;
+  deletePAWithOptions: (id: string, option: 'unbind' | 'deleteAll') => void;
   suggestNextPACode: () => string;
 
   addEquipment: (eq: Omit<Equipment, 'id' | 'createdAt'>, occurrenceDesc?: string) => { success: boolean; error?: string };
@@ -76,10 +79,16 @@ interface AppContextType {
   addUser: (username: string, name: string, role: 'Administrador' | 'Visualização') => void;
   updateUser: (id: string, updates: Partial<User>) => void;
 
+  // Unsaved plan changes control
+  hasUnsavedPlanChanges: boolean;
+  setHasUnsavedPlanChanges: (val: boolean) => void;
+
   // Auth & Search
   setCurrentUserRole: (role: 'Administrador' | 'Visualização') => void;
   globalSearch: (query: string) => GlobalSearchResult[];
   resetToInitialData: () => void;
+  clearAllData: () => void;
+  loadFullDemoData: () => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -105,13 +114,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [activePAFilter, setActivePAFilter] = useState<{ type?: string; status?: string; hasPc?: boolean; monitorCount?: number } | null>(null);
   const [activePatrimonioFilter, setActivePatrimonioFilter] = useState<{ categoria?: string; status?: string; semPa?: boolean } | null>(null);
 
+  const [isInitialized, setIsInitialized] = useState(false);
+  const [hasUnsavedPlanChanges, setHasUnsavedPlanChanges] = useState(false);
+
   // Load state from localStorage or initialize seed
   useEffect(() => {
     try {
       const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (parsed.pas && parsed.equipments && parsed.floorObjects) {
+        if (Array.isArray(parsed.pas) && Array.isArray(parsed.equipments) && Array.isArray(parsed.floorObjects)) {
           setPas(parsed.pas);
           setEquipments(parsed.equipments);
           setOccurrences(parsed.occurrences || []);
@@ -121,6 +133,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (parsed.equipmentTypes) setEquipmentTypes(parsed.equipmentTypes);
           if (parsed.equipmentStatuses) setEquipmentStatuses(parsed.equipmentStatuses);
           if (parsed.users) setUsers(parsed.users);
+          setIsInitialized(true);
           return;
         }
       }
@@ -130,11 +143,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Default seed initialization
     resetToInitialData();
+    setIsInitialized(true);
   }, []);
 
-  // Save to localStorage whenever core state updates
+  // Save to localStorage whenever core state updates (ALWAYS when initialized)
   useEffect(() => {
-    if (pas.length > 0) {
+    if (isInitialized) {
       try {
         localStorage.setItem(
           LOCAL_STORAGE_KEY,
@@ -154,7 +168,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         console.error('Error saving state to localStorage:', e);
       }
     }
-  }, [pas, equipments, occurrences, floorObjects, paTypes, paStatuses, equipmentTypes, equipmentStatuses, users]);
+  }, [isInitialized, pas, equipments, occurrences, floorObjects, paTypes, paStatuses, equipmentTypes, equipmentStatuses, users]);
 
   const resetToInitialData = () => {
     const seed = generateSeedData();
@@ -168,6 +182,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setEquipmentStatuses(INITIAL_EQUIPMENT_STATUSES);
     setUsers(INITIAL_USERS);
     setCurrentUser(INITIAL_USERS[0]);
+  };
+
+  const loadFullDemoData = () => {
+    const demo = generateFullDemoData();
+    setPas(demo.pas);
+    setEquipments(demo.equipments);
+    setOccurrences(demo.occurrences);
+    setFloorObjects(demo.floorObjects);
+  };
+
+  // Clear all PAs, Equipments, Occurrences and Floor Objects (Start completely from scratch)
+  const clearAllData = () => {
+    try {
+      localStorage.removeItem(LOCAL_STORAGE_KEY);
+    } catch (e) {
+      console.error('Error clearing localStorage:', e);
+    }
+    setPas([]);
+    setEquipments([]);
+    setOccurrences([]);
+    setFloorObjects([]);
   };
 
   // Helper date formatter
@@ -364,19 +399,66 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
-  // Delete PA
-  const deletePA = (id: string) => {
+  // Create PA and automatically place it on floor plan map
+  const createAndPlacePAOnMap = (
+    paData: Omit<PA, 'id' | 'createdAt'>,
+    occurrenceDesc?: string,
+    x = 300,
+    y = 300
+  ): { success: boolean; error?: string } => {
+    const res = addPA(paData, occurrenceDesc);
+    if (!res.success) return res;
+
+    const code = paData.code.trim().toUpperCase();
+    const newFloorObj: FloorObject = {
+      id: `flobj-pa-${Date.now()}`,
+      category: 'pa',
+      type: 'pa',
+      name: code,
+      x,
+      y,
+      width: paData.width || 70,
+      height: paData.height || 48,
+      rotation: paData.rotation || 0,
+      paCode: code,
+    };
+
+    setFloorObjects((prev) => [...prev, newFloorObj]);
+    setPas((prev) => prev.map((p) => (p.code === code ? { ...p, x, y } : p)));
+
+    return { success: true };
+  };
+
+  // Delete PA with options (move equipment to stock OR delete everything)
+  const deletePAWithOptions = (id: string, option: 'unbind' | 'deleteAll') => {
     const targetPA = pas.find((p) => p.id === id);
     if (!targetPA) return;
 
-    // Unbind equipments
-    setEquipments((prev) => prev.map((eq) => (eq.paId === id ? { ...eq, paId: null } : eq)));
+    if (option === 'unbind') {
+      // Move bound equipments to stock
+      setEquipments((prev) =>
+        prev.map((eq) => {
+          if (eq.paId === id) {
+            return { ...eq, paId: null, statusNome: 'Disponível' };
+          }
+          return eq;
+        })
+      );
+    } else if (option === 'deleteAll') {
+      // Delete bound equipments
+      setEquipments((prev) => prev.filter((eq) => eq.paId !== id));
+    }
 
     // Remove from floor objects
     setFloorObjects((prev) => prev.filter((f) => f.paCode !== targetPA.code));
 
     // Delete PA
     setPas((prev) => prev.filter((p) => p.id !== id));
+  };
+
+  // Standard Delete PA
+  const deletePA = (id: string) => {
+    deletePAWithOptions(id, 'unbind');
   };
 
   // Add Equipment
@@ -731,8 +813,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         activePatrimonioFilter,
         setActivePatrimonioFilter,
         addPA,
+        createAndPlacePAOnMap,
         updatePA,
         deletePA,
+        deletePAWithOptions,
         suggestNextPACode,
         addEquipment,
         updateEquipment,
@@ -754,9 +838,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateEquipmentStatus,
         addUser,
         updateUser,
+        hasUnsavedPlanChanges,
+        setHasUnsavedPlanChanges,
         setCurrentUserRole,
         globalSearch,
         resetToInitialData,
+        clearAllData,
+        loadFullDemoData,
       }}
     >
       {children}

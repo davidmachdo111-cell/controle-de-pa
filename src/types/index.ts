@@ -1,3 +1,49 @@
+export type PAStatus = 'disponivel' | 'ocupado' | 'manutencao' | 'desativado';
+
+export interface PA {
+  id: string;
+  codigo: string; // e.g. "PA-01"
+  setor: string;
+  x: number; // grid coordinate
+  y: number; // grid coordinate
+  largura: number;
+  altura: number;
+  rotacao: 0 | 90 | 180 | 270;
+  status: PAStatus;
+  usuarioAtual?: string;
+  ramal?: string;
+  criadoEm: string;
+}
+
+export type TipoPatrimonio = 'desktop' | 'notebook' | 'monitor' | 'headset' | 'cadeira' | 'outro';
+export type StatusPatrimonio = 'em_uso' | 'estoque' | 'defeito' | 'descartado';
+
+export interface Patrimonio {
+  id: string;
+  tagTombamento: string; // e.g. "PAT-1020"
+  tipo: TipoPatrimonio;
+  marca: string;
+  modelo: string;
+  numeroSerie: string;
+  paId: string | null; // null = estoque
+  status: StatusPatrimonio;
+  observacoes?: string;
+  criadoEm: string;
+}
+
+export interface HistoricoMovimentacao {
+  id: string;
+  dataHora: string;
+  patrimonioId: string;
+  patrimonioTag: string;
+  paOrigemId: string | null;
+  paDestinoId: string | null;
+  paOrigemCodigo?: string | null;
+  paDestinoCodigo?: string | null;
+  motivo: string;
+  responsavel: string;
+}
+
 export type UserRole = 'Administrador' | 'Visualização';
 
 export interface User {
@@ -6,114 +52,6 @@ export interface User {
   name: string;
   role: UserRole;
   active: boolean;
-}
-
-export interface PAType {
-  id: string;
-  name: string;
-  active: boolean;
-}
-
-export interface PAStatus {
-  id: string;
-  name: string;
-  requiresOccurrence: boolean;
-  color: string; // hex or tailwind badge class
-  active: boolean;
-}
-
-export interface EquipmentType {
-  id: string;
-  name: string;
-  category: 'Computador' | 'Monitor' | 'Outros';
-  active: boolean;
-}
-
-export interface EquipmentStatus {
-  id: string;
-  name: string;
-  requiresOccurrence: boolean;
-  active: boolean;
-}
-
-export interface Equipment {
-  id: string;
-  patrimonio: string; // Unique asset tag
-  tipoId: string;
-  tipoNome: string;
-  categoria: 'Computador' | 'Monitor' | 'Outros';
-  modelo?: string;
-  statusId: string;
-  statusNome: string;
-  paId: string | null; // Bound PA ID or null
-  observacao?: string;
-  createdAt: string;
-}
-
-export interface PA {
-  id: string;
-  code: string; // e.g., PA-001 (Unique)
-  tipoId: string;
-  tipoNome: string;
-  statusId: string;
-  statusNome: string;
-  patrimonioPA?: string; // PA desk/booth asset tag
-  computadorId: string | null;
-  monitorIds: string[];
-  observacoes: string;
-  // Visual placement on floor plan
-  x: number | null;
-  y: number | null;
-  rotation: number; // 0, 90, 180, 270
-  width: number;
-  height: number;
-  createdAt: string;
-}
-
-export interface Occurrence {
-  id: string;
-  entityType: 'PA' | 'EQUIPMENT';
-  entityId: string;
-  entityCode: string;
-  data: string; // DD/MM/YYYY - HH:mm
-  status: string;
-  descricao: string;
-}
-
-export type FloorObjectCategory = 'estrutura' | 'ambiente' | 'mobiliario' | 'identificacao' | 'pa';
-
-export type FloorObjectType =
-  | 'parede'
-  | 'porta'
-  | 'janela'
-  | 'pilar'
-  | 'divisoria'
-  | 'area'
-  | 'corredor'
-  | 'sala'
-  | 'mesa'
-  | 'bancada'
-  | 'armario'
-  | 'texto'
-  | 'legenda'
-  | 'pa';
-
-export interface FloorObject {
-  id: string;
-  category: FloorObjectCategory;
-  type: FloorObjectType;
-  name: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  rotation: number; // 0, 90, 180, 270
-  color?: string;
-  fill?: string;
-  stroke?: string;
-  patrimonio?: string;
-  observacao?: string;
-  paCode?: string; // Linked PA code if type === 'pa'
 }
 
 export interface GlobalSearchResult {
